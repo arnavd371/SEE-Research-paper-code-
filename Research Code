@@ -1,0 +1,114 @@
+import torch
+import matplotlib.pyplot as plt
+
+# 1.benchmark functions using pytorch
+def himmelblau(x):
+    return (x[0]**2 + x[1] - 11)**2 + (x[0] + x[1]**2 - 7)**2
+def rosenbrock(x):
+    return (1 - x[0])**2 + 100*(x[1] - x[0]**2)**2
+def ackley(x):
+    a = 20
+    b = 0.2
+    c = 2 * torch.pi
+    sum_sq = x[0]**2 + x[1]**2
+    sum_cos = torch.cos(c*x[0]) + torch.cos(c*x[1])
+    return -a*torch.exp(-b*torch.sqrt(sum_sq/2)) - torch.exp(sum_cos/2) + a + torch.exp(torch.tensor(1.0))
+# 2.escape criterion
+def escaped(x, threshold=2.0):
+    return torch.norm(x) > threshold
+# 3. SEE for fixed learning rate
+def measure_see_fixed(func, learning_rate, trials=50, Tmax=100, delta=0.1):
+    escape_times = []
+    for _ in range(trials):
+        x = torch.randn(2) * delta
+        x = x.clone().detach().requires_grad_(True)
+        for t in range(1, Tmax+1):
+            # compute gradient vector correctly
+            grad = torch.autograd.grad(func(x), x)[0]
+            x = x - learning_rate * grad
+            if escaped(x):
+                escape_times.append(t)
+                break
+    P_esc = len(escape_times)/trials
+    tau_avg = sum(escape_times)/len(escape_times) if escape_times else Tmax
+    return P_esc / tau_avg
+# 4. SEE for adaptive optimizers
+def measure_see_adaptive(func, learning_rate, optimizer_name, trials=50, Tmax=100, delta=0.1):
+    escape_times = []
+    for _ in range(trials):
+        x = torch.randn(2) * delta
+        x = x.detach().clone().requires_grad_(True)
+
+        if optimizer_name == 'Adam':
+            optimizer = torch.optim.Adam([x], lr=learning_rate)
+        elif optimizer_name == 'RMSProp':
+            optimizer = torch.optim.RMSprop([x], lr=learning_rate)
+        elif optimizer_name == 'AdaGrad':
+            optimizer = torch.optim.Adagrad([x], lr=learning_rate)
+        else:
+            raise ValueError("Unsupported optimizer")
+
+        for t in range(1, Tmax+1):
+            optimizer.zero_grad()
+            loss = func(x)
+            loss.backward()
+            optimizer.step()
+            if escaped(x):
+                escape_times.append(t)
+                break
+
+    P_esc = len(escape_times)/trials
+    tau_avg = sum(escape_times)/len(escape_times) if escape_times else Tmax
+    return P_esc / tau_avg
+# 5. experiment parameters
+learning_rates = [0.001, 0.01, 0.05, 0.1, 0.2, 0.5]
+optimizers = ['Fixed', 'Adam', 'RMSProp', 'AdaGrad']
+functions = {
+    'Himmelblau': himmelblau,
+    'Rosenbrock': rosenbrock,
+    'Ackley': ackley
+}
+# 6. run experiments
+results = {f: {opt: [] for opt in optimizers} for f in functions}
+
+for func_name, func in functions.items():
+    for lr in learning_rates:
+        # F ixed learning rate
+        see_fixed = measure_see_fixed(func, lr)
+        results[func_name]['Fixed'].append(see_fixed)
+        # Adaptive optimizers
+        for opt_name in optimizers[1:]:
+            see_adapt = measure_see_adaptive(func, lr, opt_name)
+            results[func_name][opt_name].append(see_adapt)
+        print(f"{func_name} | lr={lr} | Fixed={see_fixed:.4f}, "
+              f"Adam={results[func_name]['Adam'][-1]:.4f}, "
+              f"RMSProp={results[func_name]['RMSProp'][-1]:.4f}, "
+              f"AdaGrad={results[func_name]['AdaGrad'][-1]:.4f}")
+# 7.plotting results
+for func_name in functions:
+    plt.figure(figsize=(7,4))
+    for opt_name in optimizers:
+        plt.plot(learning_rates, results[func_name][opt_name], marker='o', label=opt_name)
+    plt.title(f"SEE vs Base Learning Rate ({func_name})")
+    plt.xlabel("Base Learning Rate")
+    plt.ylabel("Saddle Escape Efficiency (SEE)")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+# Generate LaTeX tables
+for func_name in functions:
+    print(f"\n% LaTeX table for {func_name}")
+    print("\\begin{table}[h!]")
+    print("\\centering")
+    print(f"\\caption{{Saddle Escape Efficiency (SEE) for {func_name}}}")
+    print("\\begin{tabular}{c|cccc}")
+    print("Learning Rate & Fixed & Adam & RMSProp & AdaGrad \\\\ \\hline")
+    for i, lr in enumerate(learning_rates):
+        row = f"{lr}"
+        for opt_name in optimizers:
+            row += f" & {results[func_name][opt_name][i]:.4f}"
+        row += " \\\\"
+        print(row)
+    print("\\end{tabular}")
+    print("\\end{table}")
